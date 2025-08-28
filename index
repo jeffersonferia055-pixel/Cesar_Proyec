@@ -1,0 +1,529 @@
+import { Component, ChangeDetectionStrategy, signal, effect, computed, OnInit, inject, } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
+import { HttpClient, HttpClientModule } from '@angular/common/http';
+
+// Firebase and Firestore imports
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithCustomToken, signInAnonymously } from 'firebase/auth';
+import { getFirestore, collection, onSnapshot, doc, setDoc, addDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+
+@Component({
+  selector: 'app-root',
+  template: `
+    <!-- Main container for the marketplace app -->
+    <div class="min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300 p-4 sm:p-8 font-sans">
+      
+      <!-- Display user ID for collaborative purposes -->
+      <div class="fixed top-4 right-4 p-2 text-xs bg-gray-200 dark:bg-gray-800 rounded-lg shadow-md z-50">
+        <p class="font-semibold">ID de Usuario:</p>
+        <p class="font-mono break-all">{{ auth()?.currentUser?.uid || 'Cargando...' }}</p>
+      </div>
+
+      <div class="max-w-7xl mx-auto py-8">
+        <!-- Header Section -->
+        <header class="text-center mb-12">
+          <h1 class="text-4xl sm:text-5xl md:text-6xl font-extrabold text-blue-600 dark:text-blue-400 mb-2 animate-fade-in-down">
+            ReHub Marketplace
+          </h1>
+          <p class="text-lg sm:text-xl text-gray-600 dark:text-gray-400 font-light mb-6 animate-fade-in-down delay-100">
+            Optimización del Inventario y Reducción de Desperdicios
+          </p>
+          <div class="flex justify-center items-center space-x-4 animate-fade-in-down delay-200">
+            <span class="inline-block bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 text-sm font-medium px-4 py-1.5 rounded-full">
+              $ Reducción de Costos
+            </span>
+            <span class="inline-block bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 text-sm font-medium px-4 py-1.5 rounded-full">
+              ♻ Reutilización
+            </span>
+          </div>
+        </header>
+
+        <!-- Loading state for authentication -->
+        <div *ngIf="!db()">
+          <p class="text-center text-lg text-gray-500 dark:text-gray-400">
+            Conectando a la base de datos...
+          </p>
+        </div>
+
+        <!-- Main Content (visible once authenticated) -->
+        <div *ngIf="db()">
+          <!-- Product Filtering and Search -->
+          <div class="mb-8 p-6 bg-white dark:bg-gray-800 rounded-3xl shadow-lg border border-gray-200 dark:border-gray-700">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <input
+                type="text"
+                placeholder="Buscar por nombre o descripción..."
+                class="col-span-1 md:col-span-2 p-3 rounded-xl border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow"
+                [(ngModel)]="searchTerm"
+                (input)="filterItems()"
+              />
+              <select
+                class="p-3 rounded-xl border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow"
+                [(ngModel)]="filterCategory"
+                (change)="filterItems()"
+              >
+                <option value="all">Todas las Categorías</option>
+                <option value="Repuestos y Accesorios">Repuestos y Accesorios</option>
+                <option value="Papel Higiénico y Toallas">Papel Higiénico y Toallas</option>
+                <option value="Bobinas Kraft">Bobinas Kraft</option>
+                <option value="Insumos Obsoletos">Insumos Obsoletos</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Product Listing Section -->
+          <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
+            <div *ngIf="filteredItems().length === 0" class="col-span-full text-center py-12">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto text-gray-400 dark:text-gray-600 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <h2 class="text-2xl font-semibold text-gray-500 dark:text-gray-400">
+                ¡No se encontraron recursos!
+              </h2>
+              <p class="text-gray-400 dark:text-gray-500 mt-2">Intenta ajustar tu búsqueda o filtros.</p>
+            </div>
+
+            <!-- Product Card -->
+            <div
+              *ngFor="let item of filteredItems()"
+              class="bg-white dark:bg-gray-800 rounded-3xl overflow-hidden shadow-xl hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-2 border border-gray-200 dark:border-gray-700 cursor-pointer"
+              (click)="openModal(item)"
+            >
+              <div class="relative w-full aspect-video bg-gray-200 dark:bg-gray-700 flex items-center justify-center p-4">
+                <img [src]="item.image" [alt]="item.name" class="rounded-xl w-full h-full object-cover" />
+              </div>
+              <div class="p-6">
+                <span class="inline-block bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 text-xs font-semibold px-2.5 py-1 rounded-full mb-2">
+                  {{ item.category }}
+                </span>
+                <h3 class="text-xl font-bold mb-2">{{ item.name }}</h3>
+                <p class="text-gray-600 dark:text-gray-400 text-sm mb-4 line-clamp-2">
+                  {{ item.description }}
+                </p>
+                <div class="flex justify-between items-center text-sm font-semibold">
+                  <span class="text-lg text-blue-600 dark:text-blue-400">{{ item.price | currency:'COP':'symbol':'1.0-0' }}</span>
+                  <div class="flex items-center space-x-2 text-gray-500 dark:text-gray-400">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
+                    </svg>
+                    <span>Stock: {{ item.stock }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Add New Item Button -->
+          <div class="fixed bottom-8 right-8 z-50">
+            <button
+              class="w-16 h-16 rounded-full bg-blue-600 text-white shadow-xl hover:bg-blue-700 transition-colors duration-300 flex items-center justify-center text-3xl font-bold"
+              (click)="openModal(null)"
+            >
+              +
+            </button>
+          </div>
+        </div>
+
+        <!-- Modal for viewing/adding/editing items -->
+        <div *ngIf="isModalOpen()" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div class="bg-white dark:bg-gray-800 rounded-3xl p-8 max-w-lg w-full shadow-2xl animate-zoom-in border border-gray-200 dark:border-gray-700">
+            <h2 class="text-2xl font-bold mb-6 text-center">
+              {{ selectedItem()?.id ? 'Editar Recurso' : 'Añadir Nuevo Recurso' }}
+            </h2>
+            <form (ngSubmit)="saveItem()">
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                <div class="col-span-full">
+                  <label for="name" class="block text-sm font-medium mb-1">Nombre</label>
+                  <input
+                    type="text"
+                    id="name"
+                    name="name"
+                    [(ngModel)]="newItem.name"
+                    class="w-full p-3 rounded-xl border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+                <div class="col-span-full">
+                  <label for="description" class="block text-sm font-medium mb-1">Descripción</label>
+                  <textarea
+                    id="description"
+                    name="description"
+                    [(ngModel)]="newItem.description"
+                    class="w-full p-3 rounded-xl border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    rows="3"
+                    required
+                  ></textarea>
+                  <!-- Gemini API feature button -->
+                  <div class="mt-2 text-right">
+                    <button
+                      type="button"
+                      (click)="generateDescription()"
+                      [disabled]="isGenerating()"
+                      class="inline-flex items-center px-4 py-2 text-sm font-medium rounded-xl text-white bg-blue-600 hover:bg-blue-700 transition-colors duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <span *ngIf="isGenerating()" class="animate-spin mr-2">✨</span>
+                      {{ isGenerating() ? 'Generando...' : 'Generar Descripción ✨' }}
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label for="price" class="block text-sm font-medium mb-1">Precio (COP)</label>
+                  <input
+                    type="number"
+                    id="price"
+                    name="price"
+                    [(ngModel)]="newItem.price"
+                    class="w-full p-3 rounded-xl border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+                <div>
+                  <label for="stock" class="block text-sm font-medium mb-1">Stock</label>
+                  <input
+                    type="number"
+                    id="stock"
+                    name="stock"
+                    [(ngModel)]="newItem.stock"
+                    class="w-full p-3 rounded-xl border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+                <div class="col-span-full">
+                  <label for="category" class="block text-sm font-medium mb-1">Categoría</label>
+                  <select
+                    id="category"
+                    name="category"
+                    [(ngModel)]="newItem.category"
+                    class="w-full p-3 rounded-xl border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  >
+                    <option value="Repuestos y Accesorios">Repuestos y Accesorios</option>
+                    <option value="Papel Higiénico y Toallas">Papel Higiénico y Toallas</option>
+                    <option value="Bobinas Kraft">Bobinas Kraft</option>
+                    <option value="Insumos Obsoletos">Insumos Obsoletos</option>
+                  </select>
+                </div>
+                <div class="col-span-full">
+                  <label for="image" class="block text-sm font-medium mb-1">URL de la Imagen</label>
+                  <input
+                    type="text"
+                    id="image"
+                    name="image"
+                    [(ngModel)]="newItem.image"
+                    class="w-full p-3 rounded-xl border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+              </div>
+              
+              <div class="flex justify-end space-x-4 mt-6">
+                <button
+                  type="button"
+                  (click)="closeModal()"
+                  class="px-6 py-3 rounded-xl text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors duration-300 font-semibold"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  class="px-6 py-3 rounded-xl text-white bg-blue-600 hover:bg-blue-700 transition-colors duration-300 font-semibold"
+                >
+                  {{ selectedItem()?.id ? 'Guardar Cambios' : 'Añadir Recurso' }}
+                </button>
+                <button
+                  *ngIf="selectedItem()?.id"
+                  type="button"
+                  (click)="deleteItem()"
+                  class="px-6 py-3 rounded-xl text-white bg-red-600 hover:bg-red-700 transition-colors duration-300 font-semibold"
+                >
+                  Eliminar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  `,
+  styles: [`
+    /*
+    * Estilos CSS personalizados para la aplicación
+    * Se utilizan para elementos que no se pueden estilizar fácilmente con Tailwind
+    */
+    .animate-fade-in-down {
+      animation: fadeInDown 0.6s ease-out forwards;
+      opacity: 0;
+    }
+    .animate-fade-in-down.delay-100 { animation-delay: 0.1s; }
+    .animate-fade-in-down.delay-200 { animation-delay: 0.2s; }
+    .animate-fade-in {
+      animation: fadeIn 0.3s ease-out forwards;
+    }
+    .animate-zoom-in {
+      animation: zoomIn 0.3s ease-out forwards;
+    }
+    @keyframes fadeInDown {
+      from { transform: translateY(-20px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes zoomIn {
+      from { transform: scale(0.95); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+    .line-clamp-2 {
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+    .animate-spin {
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+  `],
+  standalone: true,
+  imports: [CommonModule, FormsModule, HttpClientModule],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+})
+export class App implements OnInit {
+  // Signals for state management
+  private auth = signal<any>(null);
+  private db = signal<any>(null);
+  private userId = signal<string | null>(null);
+
+  products = signal<any[]>([]);
+  selectedItem = signal<any | null>(null);
+  isModalOpen = signal(false);
+  isGenerating = signal(false);
+
+  // Form data for new/edited items
+  newItem = {
+    name: '',
+    description: '',
+    category: 'Repuestos y Accesorios',
+    price: 0,
+    stock: 0,
+    image: '',
+  };
+
+  // Filtering signals
+  searchTerm: string = '';
+  filterCategory: string = 'all';
+
+  // Computed signal for filtered items
+  filteredItems = computed(() => {
+    const items = this.products();
+    let filtered = items;
+
+    // Filter by category
+    if (this.filterCategory !== 'all') {
+      filtered = filtered.filter(item => item.category === this.filterCategory);
+    }
+
+    // Filter by search term
+    if (this.searchTerm) {
+      const lowerCaseSearch = this.searchTerm.toLowerCase();
+      filtered = filtered.filter(item =>
+        item.name.toLowerCase().includes(lowerCaseSearch) ||
+        item.description.toLowerCase().includes(lowerCaseSearch)
+      );
+    }
+    
+    // Sort items by name
+    return filtered.sort((a, b) => a.name.localeCompare(b.name));
+  });
+
+  // Inject HttpClient for API calls
+  private http = inject(HttpClient);
+
+  // Constructor and initialization
+  constructor() {
+    // Effect to handle database and authentication initialization
+    effect(async () => {
+      if (typeof window !== 'undefined') {
+        try {
+          // Global variables from the environment
+          const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+          const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+          const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+          if (Object.keys(firebaseConfig).length > 0) {
+            const app = initializeApp(firebaseConfig);
+            const authInstance = getAuth(app);
+            const dbInstance = getFirestore(app);
+
+            // Sign in with custom token or anonymously
+            if (initialAuthToken) {
+              await signInWithCustomToken(authInstance, initialAuthToken);
+            } else {
+              await signInAnonymously(authInstance);
+            }
+
+            this.auth.set(authInstance);
+            this.db.set(dbInstance);
+
+            const user = authInstance.currentUser;
+            this.userId.set(user?.uid || crypto.randomUUID());
+
+            // Set up real-time listener for the collection
+            this.setupRealtimeData();
+          } else {
+            console.error("Firebase config is not provided. Cannot initialize app.");
+          }
+        } catch (error) {
+          console.error("Error initializing Firebase:", error);
+        }
+      }
+    }, { allowSignalWrites: true });
+  }
+
+  ngOnInit() {
+    // ngOnInit is used for other component-specific logic if needed
+  }
+
+  /**
+   * Sets up a real-time listener for the products collection in Firestore.
+   */
+  setupRealtimeData() {
+    const db = this.db();
+    const userId = this.userId();
+    if (!db || !userId) return;
+
+    // Use a public collection for this app
+    const productsCollectionRef = collection(db, `artifacts/${__app_id}/public/data/products`);
+    
+    // Listen for real-time changes
+    onSnapshot(productsCollectionRef, (snapshot) => {
+      const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      this.products.set(items);
+    }, (error) => {
+      console.error("Error getting real-time data:", error);
+    });
+  }
+
+  /**
+   * Opens the modal for adding or editing an item.
+   * @param item The item to edit, or null to add a new item.
+   */
+  openModal(item: any) {
+    if (item) {
+      this.selectedItem.set(item);
+      this.newItem = { ...item };
+    } else {
+      this.selectedItem.set(null);
+      this.newItem = {
+        name: '',
+        description: '',
+        category: 'Repuestos y Accesorios',
+        price: 0,
+        stock: 0,
+        image: 'https://placehold.co/400x300/e2e8f0/334155?text=Recurso+ReHub',
+      };
+    }
+    this.isModalOpen.set(true);
+  }
+
+  /**
+   * Closes the modal and resets the form.
+   */
+  closeModal() {
+    this.isModalOpen.set(false);
+    this.selectedItem.set(null);
+  }
+
+  /**
+   * Saves a new item or updates an existing one in Firestore.
+   */
+  async saveItem() {
+    const db = this.db();
+    if (!db) return;
+
+    try {
+      if (this.selectedItem()?.id) {
+        // Update existing document
+        const docRef = doc(db, `artifacts/${__app_id}/public/data/products`, this.selectedItem().id);
+        await updateDoc(docRef, this.newItem);
+        console.log("Document updated successfully!");
+      } else {
+        // Add new document
+        const productsCollectionRef = collection(db, `artifacts/${__app_id}/public/data/products`);
+        await addDoc(productsCollectionRef, this.newItem);
+        console.log("Document added successfully!");
+      }
+      this.closeModal();
+    } catch (error) {
+      console.error("Error saving document:", error);
+    }
+  }
+
+  /**
+   * Deletes an item from Firestore.
+   */
+  async deleteItem() {
+    const db = this.db();
+    if (!db || !this.selectedItem()?.id) return;
+
+    try {
+      const docRef = doc(db, `artifacts/${__app_id}/public/data/products`, this.selectedItem().id);
+      await deleteDoc(docRef);
+      console.log("Document deleted successfully!");
+      this.closeModal();
+    } catch (error) {
+      console.error("Error deleting document:", error);
+    }
+  }
+
+  /**
+   * Filters the displayed items based on search and category.
+   * This method is triggered by input/change events.
+   */
+  filterItems() {
+    // The filteredItems computed signal handles the filtering logic automatically
+    // This function is here to trigger the signal update via user input
+  }
+
+  /**
+   * Generates a product description using the Gemini API.
+   */
+  async generateDescription() {
+    const apiKey = "";
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+    this.isGenerating.set(true);
+
+    const userPrompt = `Genera una descripción de producto de unas 40 palabras en español. El producto se llama "${this.newItem.name}" y su categoría es "${this.newItem.category}". No incluyas el nombre del producto en la descripción.`;
+    
+    const payload = {
+      contents: [{
+        parts: [{ text: userPrompt }]
+      }],
+      tools: [{ "google_search": {} }],
+      systemInstruction: {
+        parts: [{ text: "Actúa como un copywriter profesional de productos de segunda mano." }]
+      }
+    };
+
+    try {
+      let response = await this.http.post(apiUrl, payload).toPromise();
+      const text = (response as any).candidates?.[0]?.content?.parts?.[0]?.text;
+      
+      if (text) {
+        // Update the description field
+        this.newItem.description = text.trim();
+      } else {
+        console.error("API response did not contain text content.");
+      }
+    } catch (error) {
+      console.error("Error generating description:", error);
+    } finally {
+      this.isGenerating.set(false);
+    }
+  }
+}
